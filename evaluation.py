@@ -1,31 +1,34 @@
 import json
-from collections import Counter
-from sklearn.metrics import precision_recall_fscore_support
-from seqeval.metrics import classification_report, precision_score, recall_score, f1_score
+from sklearn.metrics import precision_recall_fscore_support as prfs
+from seqeval.metrics import classification_report
+from seqeval.scheme import IOB2
 
 data = json.load(open("test_predictions.json"))
 gold = [x["gold"] for x in data]
 pred = [x["pred"] for x in data]
-
-# 1. Token-level scores per B-/I- label (O excluded)
 flat_g = [l for s in gold for l in s]
 flat_p = [l for s in pred for l in s]
-labels = sorted({l for l in flat_g + flat_p if l != "O"}, key=lambda l: (l[2:], l[0]))
-p, r, f, sup = precision_recall_fscore_support(flat_g, flat_p, labels=labels, zero_division=0)
-print("\nTOKEN LEVEL (per B-/I- label)")
-print(f"{'label':8}{'P':>7}{'R':>7}{'F1':>7}{'support':>9}")
-for l, a, b, c, s in zip(labels, p, r, f, sup):
-    print(f"{l:8}{a:7.3f}{b:7.3f}{c:7.3f}{s:9d}")
+types = ["ART", "CON", "LOC", "MAT", "PER", "SPE"]
+def row(name, p, r, f, n=""):
+    print(f"{name:12}{p:7.3f}{r:7.3f}{f:7.3f}{n:>7}")
 
-# 2. Full-entity scores per entity type (strict span match)
-print("\nENTITY LEVEL (per type, strict match)")
-rep = classification_report(gold, pred, digits=3, output_dict=True, zero_division=0)
-print(f"{'type':8}{'P':>7}{'R':>7}{'F1':>7}{'support':>9}")
-for t in sorted(k for k in rep if k not in ("micro avg", "macro avg", "weighted avg")):
+# 1. Token level: B- and I- labels per type, plus micro/macro per prefix
+print("TOKEN LEVEL")
+for prefix in ("B", "I"):
+    labs = [f"{prefix}-{t}" for t in types if f"{prefix}-{t}" in set(flat_g)]
+    p, r, f, n = prfs(flat_g, flat_p, labels=labs, zero_division=0)
+    for l, a, b, c, s in zip(labs, p, r, f, n):
+        row(l, a, b, c, s)
+    for avg in ("micro", "macro"):
+        a, b, c, _ = prfs(flat_g, flat_p, labels=labs, average=avg, zero_division=0)
+        row(f"{prefix} {avg}", a, b, c, int(n.sum()))
+
+# 2. Full entities: strict IOB2 matching (all tokens must be right)
+print("\nENTITY LEVEL (strict IOB2)")
+rep = classification_report(gold, pred, mode="strict", scheme=IOB2, output_dict=True, zero_division=0)
+for t in types:
     v = rep[t]
-    print(f"{t:8}{v['precision']:7.3f}{v['recall']:7.3f}{v['f1-score']:7.3f}{v['support']:9d}")
-
-# 3. Overall entity-level micro/macro F1
-print("\nOVERALL")
-print(f"Micro P/R/F1: {precision_score(gold,pred):.3f} / {recall_score(gold,pred):.3f} / {f1_score(gold,pred):.3f}")
-print(f"Macro F1 (all types): {rep['macro avg']['f1-score']:.3f}")
+    row(t, v["precision"], v["recall"], v["f1-score"], int(v["support"]))
+for avg in ("micro avg", "macro avg"):
+    v = rep[avg]
+    row(avg, v["precision"], v["recall"], v["f1-score"], int(v["support"]))
